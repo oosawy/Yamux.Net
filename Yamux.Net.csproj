@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Yamux.Net</PackageId>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <Authors>oosawy</Authors>
     <Description>A .NET implementation of Yamux (Yet Another Multiplexer) protocol.</Description>
     <RepositoryUrl>https://github.com/oosawy/Yamux.Net</RepositoryUrl>
