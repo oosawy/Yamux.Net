@@ -32,6 +32,7 @@ public class YamuxStream : Stream, IAsyncDisposable
     private long _recvWindow;
     private long _sendWindow;
     private readonly SemaphoreSlim _sendWindowSemaphore = new(0);
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     private readonly object _stateLock = new();
     private CancellationTokenSource? _closeTimeoutCts;
@@ -165,15 +166,23 @@ public class YamuxStream : Stream, IAsyncDisposable
     {
         ThrowIfDisposed();
 
-        while (!buffer.IsEmpty)
+        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            var granted = await AcquireSendWindowAsync(buffer.Length, cancellationToken);
-            var chunk = buffer.Slice(0, granted);
+            while (!buffer.IsEmpty)
+            {
+                var granted = await AcquireSendWindowAsync(buffer.Length, cancellationToken);
+                var chunk = buffer.Slice(0, granted);
 
-            if (!_session.TrySendFrame(new Frame(YamuxConstants.FrameTypeData, 0, _streamId, chunk)))
-                throw new SessionShutdownException();
+                if (!_session.TrySendFrame(new Frame(YamuxConstants.FrameTypeData, 0, _streamId, chunk)))
+                    throw new SessionShutdownException();
 
-            buffer = buffer.Slice(granted);
+                buffer = buffer.Slice(granted);
+            }
+        }
+        finally
+        {
+            _sendLock.Release();
         }
     }
 
@@ -231,19 +240,27 @@ public class YamuxStream : Stream, IAsyncDisposable
             _state = StreamState.LocalClose;
         }
 
-        SetDisposed();
-
-        await _session.SendFinAsync(_streamId).ConfigureAwait(false);
-        await _pipe.Writer.CompleteAsync().ConfigureAwait(false);
-
-        var closeTimeout = _session.Config.StreamCloseTimeout;
-        if (closeTimeout > TimeSpan.Zero)
+        await _sendLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            _closeTimeoutCts = new CancellationTokenSource();
-            _closeTimeoutTask = Task.Delay(closeTimeout, _closeTimeoutCts.Token).ContinueWith(async _ =>
+            SetDisposed();
+
+            await _session.SendFinAsync(_streamId).ConfigureAwait(false);
+            await _pipe.Writer.CompleteAsync().ConfigureAwait(false);
+
+            var closeTimeout = _session.Config.StreamCloseTimeout;
+            if (closeTimeout > TimeSpan.Zero)
             {
-                await ForceResetByTimeout().ConfigureAwait(false);
-            }, TaskContinuationOptions.NotOnCanceled);
+                _closeTimeoutCts = new CancellationTokenSource();
+                _closeTimeoutTask = Task.Delay(closeTimeout, _closeTimeoutCts.Token).ContinueWith(async _ =>
+                {
+                    await ForceResetByTimeout().ConfigureAwait(false);
+                }, TaskContinuationOptions.NotOnCanceled);
+            }
+        }
+        finally
+        {
+            _sendLock.Release();
         }
     }
 
@@ -294,6 +311,7 @@ public class YamuxStream : Stream, IAsyncDisposable
             return;
 
         await _pipe.Writer.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+        await _pipe.Writer.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     internal async ValueTask SessionClosing()
