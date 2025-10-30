@@ -112,12 +112,12 @@ public class YamuxStream : Stream, IAsyncDisposable
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-        throw new NotSupportedException();
+        return ReadAsync(buffer, offset, count).GetAwaiter().GetResult();
     }
 
     public override void Write(byte[] buffer, int offset, int count)
     {
-        throw new NotSupportedException();
+        WriteAsync(buffer, offset, count).GetAwaiter().GetResult();
     }
 
     public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
